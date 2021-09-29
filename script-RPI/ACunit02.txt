@@ -1,0 +1,328 @@
+import RPi.GPIO as GPIO
+import dht11
+import time
+from datetime import datetime
+import os
+from influxdb import client as influxdb
+import smbus  # import SMBus module of I2C
+from time import sleep  # import
+from datetime import datetime
+from w1thermsensor import W1ThermSensor
+from pytictoc import TicToc
+
+import board
+import busio as io
+import adafruit_mlx90614
+
+
+# ------------------------------------------------------------
+try:
+    os.system('modprobe w1-gpio')
+    os.system('modprobe w1-therm')
+except:
+    f = open(dir, "a")
+    f.write("DS18B20 disconnected: " + str(datetime.now()) + "\n")
+    f.close()
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# initialize GPIO
+GPIO.setwarnings(True)
+GPIO.setmode(GPIO.BCM)
+# read data using pin 4
+instance = dht11.DHT11(pin=4)
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+# TCRT5000 read data using pin 22
+D0 = 22
+GPIO.setup(D0, GPIO.IN)
+GPIO.add_event_detect(D0, GPIO.RISING, bouncetime=100)
+t = TicToc()
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# InfluxDB Connection Details
+influxHost = '172.16.0.226'
+influxUser = 'jguaman'
+influxPasswd = 'jguaman'
+# InfluxDB data
+influxdbName = 'acunit'
+# ------------------------------------------------------------
+
+#valid = True
+
+# ------------------------------------------------------------
+dir = "/home/pi/log/sensors.log"
+f = open(dir, "a")
+f.write("REBOOT: " + str(datetime.now()) + "\n")
+f.close()
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# some MPU6050 Registers and their Address
+PWR_MGMT_1 = 0x6B
+SMPLRT_DIV = 0x19
+CONFIG = 0x1A
+GYRO_CONFIG = 0x1B
+INT_ENABLE = 0x38
+ACCEL_XOUT_H = 0x3B
+ACCEL_YOUT_H = 0x3D
+ACCEL_ZOUT_H = 0x3F
+GYRO_XOUT_H = 0x43
+GYRO_YOUT_H = 0x45
+GYRO_ZOUT_H = 0x47
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+
+
+def MPU_Init():
+    # write to sample rate register
+    bus.write_byte_data(Device_Address, SMPLRT_DIV, 7)
+    # Write to power management register
+    bus.write_byte_data(Device_Address, PWR_MGMT_1, 1)
+    # Write to Configuration register
+    bus.write_byte_data(Device_Address, CONFIG, 0)
+    # Write to Gyro configuration register
+    bus.write_byte_data(Device_Address, GYRO_CONFIG, 24)
+    # Write to interrupt enable register
+    bus.write_byte_data(Device_Address, INT_ENABLE, 1)
+
+
+def read_raw_data(addr):
+    # Accelero and Gyro value are 16-bit
+    high = bus.read_byte_data(Device_Address, addr)
+    low = bus.read_byte_data(Device_Address, addr+1)
+    # concatenate higher and lower value
+    value = ((high << 8) | low)
+    # to get signed value from mpu6050
+    if(value > 32768):
+        value = value - 65536
+    return value
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+
+
+def PyMLX90614():
+    f = open(dir, "a")
+    f.write("trying read PyMLX90614: " + str(datetime.now()) + "\n")
+    f.close()
+
+    i2c = io.I2C(board.SCL, board.SDA, frequency=100000)
+    mlx = adafruit_mlx90614.MLX90614(i2c)
+
+    # temperature results in celsius
+    #print("Ambent Temp: ", mlx.ambient_temperature)
+    #print("Object Temp: ", mlx.object_temperature)
+
+    f = open(dir, "a")
+    f.write("Last valid input PyMLX90614: " + str(datetime.now()) + "\n")
+    f.close()
+
+    influx_metric_PyMLX90614 = [{
+        'measurement': 'PyMLX90614',
+        'fields': {
+            'ambient': mlx.ambient_temperature,
+            'object': mlx.object_temperature,
+        }
+    }]
+    #return influx_metric_PyMLX90614
+    return mlx.ambient_temperature, mlx.object_temperature 
+
+# ------------------------------------------------------------
+
+
+def TCRT5000():
+    f = open(dir, "a")
+    f.write("trying read TCRT5000: " + str(datetime.now()) + "\n")
+    f.close()
+
+    count = 0
+    t.tic()
+    while t.tocvalue() < 5:
+        if GPIO.event_detected(D0):
+            count += 1
+
+    rpm = count*12
+    print("rpm: ", rpm)
+
+    influx_metric_TCRT5000 = [{
+        'measurement': 'TCRT5000',
+        'fields': {
+            'RPM': rpm
+        }
+    }]
+    #return influx_metric_TCRT5000
+    return rpm
+
+# ------------------------------------------------------------
+
+
+# ------------------------------------------------------------
+def DS18B20():
+    f = open(dir, "a")
+    f.write("trying read DS18B20: " + str(datetime.now()) + "\n")
+    f.close()
+
+    # w1thermsensor ls -- 02 - 3c01d607dd47
+    # w1thermsensor ls -- 01 - 3c01d607b5ec
+    sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, "3c01d607b5ec")
+    temperature_DS18B20 = sensor.get_temperature()
+    print(temperature_DS18B20)
+
+    f = open(dir, "a")
+    f.write("Last valid input DS18B20: " + str(datetime.now()) + "\n")
+    f.close()
+
+    influx_metric_DS18B20 = [{
+        'measurement': 'DS18B20',
+        'fields': {
+            'temperature': temperature_DS18B20
+        }
+    }]
+    #return influx_metric_DS18B20
+    return temperature_DS18B20
+
+
+# ------------------------------------------------------------
+def DHT11():
+    f = open(dir, "a")
+    f.write("trying read DHT11: " + str(datetime.now()) + "\n")
+    f.close()
+
+    value = True
+    var = 0
+    while value:
+        result = instance.read()
+        var += 1
+        if result.is_valid() or var == 50:
+            value = False
+            print("var: ", var)
+
+    #print("Humidity: %-3.1f %%" % result.humidity)
+
+    f = open(dir, "a")
+    f.write("Last valid input DHT11: " + str(datetime.now()) + "\n")
+    f.close()
+
+    influx_metric_DHT11 = [{
+        'measurement': 'DHT11',
+        'fields': {
+            'temperatureDHT11': result.temperature,
+            'humidityDHT11': result.humidity
+        }
+    }]
+
+    return influx_metric_DHT11
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+
+
+def MPU6050():
+    f = open(dir, "a")
+    f.write("trying read MPU6050: " + str(datetime.now()) + "\n")
+    f.close()
+
+    # Read Accelerometer raw value
+    acc_x = read_raw_data(ACCEL_XOUT_H)
+    acc_y = read_raw_data(ACCEL_YOUT_H)
+    acc_z = read_raw_data(ACCEL_ZOUT_H)
+
+    # Read Gyroscope raw value
+    gyro_x = read_raw_data(GYRO_XOUT_H)
+    gyro_y = read_raw_data(GYRO_YOUT_H)
+    gyro_z = read_raw_data(GYRO_ZOUT_H)
+
+    # Full scale range +/- 250 degree/C as per sensitivity scale factor
+    Ax = acc_x/16384.0
+    Ay = acc_y/16384.0
+    Az = acc_z/16384.0
+
+    Gx = gyro_x/131.0
+    Gy = gyro_y/131.0
+    Gz = gyro_z/131.0
+
+    influx_metric_MPU6050 = [{
+        'measurement': 'mpu6050',
+        'fields': {
+            'accelerometerX': acc_x,
+            'accelerometerY': acc_y,
+            'accelerometerZ': acc_z,
+            'gyroscopeX': gyro_x,
+            'gyroscopeY': gyro_y,
+            'gyroscopeZ': gyro_z,
+        }
+    }]
+
+    f = open(dir, "a")
+    f.write("Last valid input MPU6050: " + str(datetime.now()) + "\n")
+    f.close()
+
+    #return influx_metric_MPU6050
+    return acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z
+
+# ------------------------------------------------------------
+
+
+def save_InfluxDB(influx_metric):
+    try:
+        db = influxdb.InfluxDBClient(
+            influxHost, 8086, influxUser, influxPasswd, influxdbName)
+        db.write_points(influx_metric)
+
+        f = open(dir, "a")
+        f.write("Write: " + str(datetime.now()) + "\n")
+        f.close()
+
+    finally:
+        db.close()
+    time.sleep(0.05)
+
+
+# ------------------------------------------------------------
+bus = smbus.SMBus(1) 	# or bus = smbus.SMBus(0) for older version boards
+Device_Address = 0x68   # MPU6050 device address
+
+MPU_Init()
+# ------------------------------------------------------------
+
+try:
+    while True:
+
+        try:
+            rpm = TCRT5000()
+            acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z = MPU6050()
+            airflow = DS18B20()
+            sec_air, motor = PyMLX90614()
+
+            influx_metric_air = [{
+                'measurement': 'air02',
+                'fields': {
+                    'rpm': rpm,
+                    'accX': acc_x,
+                    'accY': acc_y,
+                    'accZ': acc_z,
+                    'gyroX': gyro_x,
+                    'gyroY': gyro_y,
+                    'gyroZ': gyro_z,
+                    'airflow': airflow,
+                    'sec_air': sec_air,
+                    'motor': motor
+                }
+            }]
+            
+            save_InfluxDB(influx_metric_air)
+        except:
+            f = open(dir, "a")
+            f.write("ERROR AIR02: " + str(datetime.now()) + "\n")
+            f.close()
+
+        time.sleep(1)
+
+
+except KeyboardInterrupt:
+    print("Cleanup")
+    GPIO.cleanup()
